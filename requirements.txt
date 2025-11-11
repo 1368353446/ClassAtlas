@@ -1,0 +1,12 @@
+streamlit
+langchain
+langchain-openai
+langchain-community
+langchain-huggingface
+faster-whisper
+torch
+torchvision
+opencv-python-headless
+pillow
+python-dotenv
+faiss-cpu
