@@ -1,7 +1,6 @@
-# Secrets & env
+# Settings
+settings.json
 .env
-.env.*
-!.env.example
 
 # Python cache / build
 __pycache__/

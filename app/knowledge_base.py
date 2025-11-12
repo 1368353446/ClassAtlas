@@ -4,10 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
-from langchain_core.documents import Document
-
 from .loaders import load_knowledge_outline, load_slide_manifest, load_transcript_segments
-from .models import KnowledgeOutline, SlideManifestEntry, TranscriptSegment, segments_to_documents
+from .models import KnowledgeOutline, SlideManifestEntry, TranscriptSegment
 
 
 @dataclass
@@ -15,7 +13,6 @@ class KnowledgeAssets:
     segments: List[TranscriptSegment]
     outline: KnowledgeOutline
     slides: List[SlideManifestEntry]
-    documents: List[Document]
 
 
 def build_assets(lecture_dir: Path, language: str | None = None) -> KnowledgeAssets:
@@ -25,12 +22,10 @@ def build_assets(lecture_dir: Path, language: str | None = None) -> KnowledgeAss
     segments = load_transcript_segments(base_dir)
     outline = load_knowledge_outline(base_dir)
     slides = load_slide_manifest(lecture_dir)
-    documents = segments_to_documents(segments)
     return KnowledgeAssets(
         segments=segments,
         outline=outline,
         slides=slides,
-        documents=documents,
     )
 
 

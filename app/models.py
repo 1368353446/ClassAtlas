@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List
 
-from langchain_core.documents import Document
-
 
 @dataclass
 class TranscriptSegment:
@@ -29,6 +27,7 @@ class KnowledgePoint:
     start_time: float
     end_time: float
     summary: str
+    content: str
     teaching_method: str
     emphasis: str
     slides: List[int] = field(default_factory=list)
@@ -40,6 +39,7 @@ class KnowledgePoint:
             start_time=float(data.get("start_time", 0.0)),
             end_time=float(data.get("end_time", 0.0)),
             summary=data.get("summary", ""),
+            content=data.get("content", ""),
             teaching_method=data.get("teaching_method", ""),
             emphasis=data.get("emphasis", ""),
             slides=list(data.get("slides", [])),
@@ -77,17 +77,3 @@ class SlideManifestEntry:
             end_time=float(data.get("end_time", 0.0)),
             image_path=data.get("image_path", ""),
         )
-
-
-def segments_to_documents(segments: List[TranscriptSegment]) -> List[Document]:
-    docs: List[Document] = []
-    for segment in segments:
-        if not segment.text:
-            continue
-        metadata = {
-            "segment_index": segment.segment_index,
-            "start_time": segment.start,
-            "end_time": segment.end,
-        }
-        docs.append(Document(page_content=segment.text, metadata=metadata))
-    return docs

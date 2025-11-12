@@ -42,10 +42,12 @@ def serialize_transcript_segments(segments: Iterable) -> List[dict]:
 def build_transcript_outline_text(segments: Iterable) -> str:
     lines = []
     for segment in segments:
-        text = segment.text.strip()
+        text = _get_text(segment)
         if not text:
             continue
-        lines.append(f"[{float(segment.start):.2f}s - {float(segment.end):.2f}s] {text}")
+        start = float(_get_attr(segment, "start", 0.0))
+        end = float(_get_attr(segment, "end", start))
+        lines.append(f"[{start:.2f}s - {end:.2f}s] {text}")
     return "\n".join(lines)
 
 
@@ -53,7 +55,7 @@ def infer_language_from_segments(segments: Iterable[dict] | Iterable) -> str:
     chinese = 0
     latin = 0
     for segment in segments:
-        text = segment["text"] if isinstance(segment, dict) else getattr(segment, "text", "")
+        text = _get_text(segment)
         for char in text:
             if "\u4e00" <= char <= "\u9fff":
                 chinese += 1
@@ -62,3 +64,14 @@ def infer_language_from_segments(segments: Iterable[dict] | Iterable) -> str:
     if chinese == 0 and latin == 0:
         return "unknown"
     return "zh" if chinese >= latin else "en"
+
+
+def _get_attr(segment, name: str, default):
+    if isinstance(segment, dict):
+        return segment.get(name, default)
+    return getattr(segment, name, default)
+
+
+def _get_text(segment) -> str:
+    value = _get_attr(segment, "text", "")
+    return value.strip() if isinstance(value, str) else ""

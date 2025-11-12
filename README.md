@@ -7,9 +7,11 @@
 ## Highlights
 
 - **End-to-end pipeline** – Faster-Whisper transcription, LLM-based knowledge outlining, slide extraction, PDF bundling, and optional multi-language translation.
-- **Multi-lecture workspace** – Upload, monitor, and delete lectures directly in the UI; each run keeps its own transcripts, slides, and FAISS index.
-- **Bilingual experience** – UI toggles between English and Chinese; you can auto-generate translated transcripts/outlines so every lecture exposes multiple language versions.
-- **Retrieval-first QA** – Lightweight BM25 retriever plus optional FAISS vector store; you can fall back to citation-style answers when LLMs are disabled.
+- **Multi-lecture workspace** – Upload, monitor, and delete lectures directly in the UI; each run keeps its own transcripts and slides.
+- **Multilingual versions** – UI toggles between English and Chinese, while transcript/outline translations can target any configured language (Chinese, English, Japanese, Korean, French, etc.).
+- **Dual QA modes** – One call scans the entire transcript (timestamps + summaries) while another runs a multi-turn free-form LLM chat; outputs are concatenated so users see grounded hits and open-ended answers side by side.
+- **Configurable runtime** – Adjust LLM endpoint, Whisper size, and lecture storage directory directly inside the System Settings panel; changes persist to `settings.json` and trigger an automatic reload.
+- **Slide alignment from PDF** – Upload the instructor’s slides as a PDF; each page is matched to video frames (ResNet features sampled every 2s) and attached to the relevant knowledge segments in chronological order.
 - **Collaboration-ready** – Assets live under `data/lectures/<lecture_id>/`, making it easy to sync or deploy in different environments.
 
 ## Getting Started
@@ -22,19 +24,20 @@ cd ClassAtlas
 pip install -r requirements.txt
 ```
 
-### 2. Configure environment
+### 2. Configure settings
 
-Copy `.env.example` to `.env` and adjust values:
+On first launch the app creates `settings.json` (ignored by git). Edit it directly or use the in-app **System Settings** panel. Example structure:
 
-```env
-LECTURE_ROOT=data/lectures
-MODELSCOPE_API_KEY=sk-your-modelscope-key
-LLM_MODEL_NAME=Qwen/Qwen3-8B
-LLM_BASE_URL=https://api-inference.modelscope.cn/v1/
-EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+```json
+{
+  "llm_model": "Qwen/Qwen3-8B",
+  "llm_base_url": "https://api-inference.modelscope.cn/v1/",
+  "llm_api_key": "<your ModelScope key>",
+  "whisper_model": "medium",
+  "lecture_root": "data/lectures"
+}
 ```
 
-> Need FAISS? Install a build compatible with your NumPy version, e.g. `pip install "numpy<2" faiss-cpu`.
 
 ### 3. Process lectures
 
@@ -48,7 +51,7 @@ python process_lecture.py \
   --title "Lecture A"
 ```
 
-Or upload a video from the “Lecture Management” panel; optionally select translation targets so the translated transcripts/outlines are generated right after the base run.
+Or upload a video from the “Lecture Management” panel. You can optionally attach a slides PDF; each page is aligned to the video (sampled every 2 seconds) and later mapped onto the summarized knowledge segments.
 
 ### 4. Launch the UI
 
@@ -61,7 +64,16 @@ Inside the app:
 1. Use the top-right language toggle (English/中文).
 2. “Lecture Management” uploads and deletes lectures, showing stage-by-stage timings.
 3. “Lecture Explorer” lets you choose a lecture & version to review the video, overview, per-point insights, slides, and the entire transcript.
-4. Open the sidebar “Knowledge Q&A” to ask questions while studying; BM25 works offline, FAISS enables semantic search, and you can switch off the LLM for citation-style answers.
+4. Open the sidebar “Knowledge Q&A” to run transcript-grounded lookups (timestamps + summaries) and an optional multi-turn free-form chat in parallel; each call auto-detects the user language.
+
+### 5. Tune runtime settings
+
+- Visit the **System Settings** section (below Lecture Management) to edit:
+  - LLM endpoint (model/base URL/API key)
+  - Default Whisper model size
+  - Lecture storage directory
+- Saving triggers a quick reload so the new configuration is applied everywhere.
+- Knowledge segments are now created via multi-step LLM analysis (turning points → block summaries → rich content). Every segment surfaces title, summary, detailed notes, teaching method, emphasis, timestamps, and any attached PDF pages.
 
 ## Project Layout
 
@@ -72,21 +84,19 @@ Inside the app:
 - `app/translation.py` – optional translation workflow (stores outputs under `translations/<lang>/`).
 - `app/lectures.py` – metadata store (source language, translations, timestamps).
 - `app/knowledge_base.py`, `app/loaders.py`, `app/models.py` – data access helpers.
-- `app/retrievers.py`, `app/vector_store.py` – BM25 retriever and FAISS integration (with graceful fallback).
-- `app/qa.py` – LangChain-based QA chain with LLM on/off switch.
+- `app/qa.py` – transcript-grounded QA plus a multi-turn general chat agent, both sharing the same LLM backend.
 - `app/editor.py` – placeholder for natural-language editing.
 
 ## Deployment Notes
 
 - **Data directory** – By default everything is written to `data/lectures/`. Point `LECTURE_ROOT` to persistent storage in production.
-- **Secrets** – Never commit `.env`; use `.env.example` as the template.
-- **Dependencies** – Use `requirements.txt` to pin versions. If you rely on GPU FAISS, adjust the requirement accordingly.
+- **Secrets** – Never commit `settings.json`; it already lives in `.gitignore`.
+- **Dependencies** – Use `requirements.txt` to pin versions; remove or add packages (e.g., GPU-accelerated Whisper) as needed for your stack.
 - **Automation** – Schedule `process_lecture.py` for batch jobs; host the Streamlit app via Streamlit Cloud, containers, or any server with Python.
+- **Caching** – If `transcript_segments.json` already exists for a lecture, the pipeline skips Whisper and reuses the cached transcript, saving time on re-runs.
 
 ## Next Steps
 
-- Plug in additional document sources (slides metadata, teacher notes) by adjusting `KnowledgeQASystem` inputs.
+- Plug in additional document sources (slides metadata, teacher notes) by extending the transcript prompt before calling `TranscriptQASystem`.
 - Replace the placeholder editor with a formal revision workflow.
 - Integrate authentication or classroom-level permissions if sharing across teams.
-
-Looking for the Chinese guide? See [README_ZH.md](README_ZH.md).

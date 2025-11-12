@@ -1,98 +1,220 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import List, Sequence
+from typing import List, Literal, Sequence
 
-from langchain_core.documents import Document
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field, ValidationError
 
-from . import config
-from .retrievers import BM25Retriever, RetrievalHit
-from .vector_store import FaissRetriever
+from .llm_utils import (
+    AgentNotAvailableError,
+    invoke_structured_prompt,
+    invoke_text_prompt,
+    prepare_history,
+    blank_history,
+    build_chat_model,
+)
+from .models import TranscriptSegment
+
+def build_default_llm(streaming: bool = True):
+    return build_chat_model(streaming=streaming)
 
 
-def build_default_llm():
-    if not config.MODELSCOPE_API_KEY:
-        return None
-    return ChatOpenAI(
-        model=config.LLM_MODEL,
-        api_key=config.MODELSCOPE_API_KEY,
-        base_url=config.LLM_BASE_URL,
-        streaming=True,
+def _detect_language(text: str) -> str:
+    chinese = 0
+    latin = 0
+    for ch in text:
+        if "\u4e00" <= ch <= "\u9fff":
+            chinese += 1
+        elif ch.isalpha():
+            latin += 1
+    if chinese == 0 and latin == 0:
+        return "unknown"
+    return "zh" if chinese >= latin else "en"
+
+
+def _language_instruction(lang_code: str) -> str:
+    if lang_code == "zh":
+        return "Answer entirely in Chinese."
+    if lang_code == "en":
+        return "Answer entirely in English."
+    return "Respond in the same language used in the latest question."
+
+
+def _llm_missing_message(lang_code: str) -> str:
+    if lang_code == "zh":
+        return "尚未配置大模型，暂时无法生成回答。"
+    if lang_code == "en":
+        return "The language model is unavailable, so I cannot answer this yet."
+    return "The language model is unavailable, so I cannot answer this yet."
+
+
+def _not_found_message(lang_code: str) -> str:
+    if lang_code == "zh":
+        return "在课堂转录中没有找到相关内容。"
+    if lang_code == "en":
+        return "No matching content was found in the lecture transcript."
+    return "No matching content was found in the lecture transcript."
+
+
+class TranscriptMatchModel(BaseModel):
+    start_time: float = Field(..., description="Start time in seconds of the relevant segment.")
+    end_time: float = Field(..., description="End time in seconds of the relevant segment.")
+    excerpt: str = Field(..., description="Short quote or paraphrase from the transcript.")
+    summary: str = Field(..., description="Brief summary showing how this segment answers the question.")
+
+
+class TranscriptQAResponseModel(BaseModel):
+    status: Literal["found", "not_found"] = Field(
+        ...,
+        description="Use 'found' when the transcript covers the topic, otherwise 'not_found'.",
+    )
+    language: str = Field(
+        ...,
+        description="Language code (e.g., zh or en) that matches the user's latest question.",
+    )
+    matches: List[TranscriptMatchModel] = Field(
+        default_factory=list,
+        description="Chronological list of up to four relevant transcript segments.",
+    )
+    answer: str = Field(
+        ...,
+        description="User-facing summary in the user's language. For 'not_found' explain that nothing matched.",
     )
 
 
 @dataclass
-class QAResponse:
+class TranscriptHit:
+    start_time: float
+    end_time: float
+    excerpt: str
+    summary: str
+
+
+@dataclass
+class TranscriptQAResult:
+    status: str
+    language: str
+    matches: List[TranscriptHit]
     answer: str
-    hits: List[RetrievalHit]
-    source_mode: str
 
 
-class KnowledgeQASystem:
-    def __init__(
-        self,
-        documents: Sequence[Document],
-        *,
-        llm=None,
-        bm25_retriever: BM25Retriever | None = None,
-        faiss_retriever: FaissRetriever | None = None,
-        top_k: int = 5,
-    ):
-        self.documents = list(documents)
-        self.top_k = top_k
-        self.bm25 = bm25_retriever or BM25Retriever(self.documents)
-        self.faiss = faiss_retriever
-        self.llm = llm or build_default_llm()
-        self.prompt = PromptTemplate(
-            template=(
-                "You are a helpful teaching assistant. Answer the user's question using only the given context.\n"
-                "If the context does not contain the answer, reply that it is unknown.\n\n"
-                "Context:\n{context}\n\nQuestion: {question}\nAnswer:"
+@dataclass
+class GeneralQAResponse:
+    answer: str
+    language: str
+
+
+TRANSCRIPT_QA_SYSTEM = (
+    "You analyze full lecture transcripts with timestamps. "
+    "Find the segments that answer the learner's question, summarize them, and respond strictly using the JSON schema. "
+    "{language_instruction}"
+)
+TRANSCRIPT_QA_HUMAN = (
+    "Question:\n{question}\n\nTranscript:\n{transcript}\n\n"
+    "{input}"
+)
+
+GENERAL_CHAT_SYSTEM = (
+    "You are a thoughtful teaching assistant who reasons carefully and never invents transcript details. {language_instruction}"
+)
+
+class TranscriptQASystem:
+    def __init__(self, segments: Sequence[TranscriptSegment], *, llm=None):
+        self.segments = [segment for segment in segments if segment.text.strip()]
+        self.transcript_text = self._format_transcript(self.segments)
+
+    def answer(self, question: str) -> TranscriptQAResult:
+        lang_code = _detect_language(question)
+        if not self.segments:
+            return TranscriptQAResult(
+                status="not_found",
+                language=lang_code,
+                matches=[],
+                answer=_not_found_message(lang_code),
+            )
+        variables = {
+            "question": question,
+            "transcript": self.transcript_text,
+            "language_instruction": _language_instruction(lang_code),
+            "input": (
+                "Return the JSON response with status, language, matches, and answer fields. "
+                "Matches must be chronological."
             ),
-            input_variables=["question", "context"],
+        }
+        try:
+            response = invoke_structured_prompt(
+                system_template=TRANSCRIPT_QA_SYSTEM,
+                human_template=TRANSCRIPT_QA_HUMAN,
+                variables=variables,
+                response_model=TranscriptQAResponseModel,
+            )
+        except AgentNotAvailableError:
+            return TranscriptQAResult(
+                status="not_found",
+                language=lang_code,
+                matches=[],
+                answer=_llm_missing_message(lang_code),
+            )
+        except (json.JSONDecodeError, ValidationError):
+            try:
+                raw_text = invoke_text_prompt(
+                    system_template=TRANSCRIPT_QA_SYSTEM,
+                    human_template=TRANSCRIPT_QA_HUMAN,
+                    variables=variables,
+                )
+                response = TranscriptQAResponseModel.model_validate_json(raw_text)
+            except Exception:
+                return TranscriptQAResult(
+                    status="not_found",
+                    language=lang_code,
+                    matches=[],
+                    answer=_llm_missing_message(lang_code),
+                )
+        matches = [
+            TranscriptHit(
+                start_time=item.start_time,
+                end_time=item.end_time,
+                excerpt=item.excerpt,
+                summary=item.summary,
+            )
+            for item in response.matches
+        ]
+        return TranscriptQAResult(
+            status=response.status,
+            language=response.language or lang_code,
+            matches=matches,
+            answer=response.answer,
         )
-        if self.llm:
-            self.chain = self.prompt | self.llm | StrOutputParser()
-        else:
-            self.chain = None
-
-    def _retrieve(self, question: str, mode: str) -> List[RetrievalHit]:
-        if mode == "faiss" and self.faiss is not None:
-            return self.faiss.search(question, top_k=self.top_k)
-        return self.bm25.search(question, top_k=self.top_k)
 
     @staticmethod
-    def _format_context(hits: List[RetrievalHit]) -> str:
-        lines = []
-        for hit in hits:
-            meta = hit.document.metadata or {}
-            start = meta.get("start_time")
-            end = meta.get("end_time")
-            prefix = ""
-            if start is not None and end is not None:
-                prefix = f"[{start:.2f}-{end:.2f}s] "
-            lines.append(f"{prefix}{hit.document.page_content}")
-        return "\n".join(lines[:5])
+    def _format_transcript(segments: Sequence[TranscriptSegment]) -> str:
+        lines: List[str] = []
+        for segment in segments:
+            text = segment.text.strip()
+            if not text:
+                continue
+            lines.append(f"[{segment.start:.2f}s - {segment.end:.2f}s] {text}")
+        return "\n".join(lines)
 
-    def _fallback_answer(self, hits: List[RetrievalHit]) -> str:
-        if not hits:
-            return "No relevant segments were found in this lecture."
-        best = hits[0]
-        meta = best.document.metadata or {}
-        start = meta.get("start_time")
-        end = meta.get("end_time")
-        if start is not None and end is not None:
-            return f"{best.document.page_content} ({start:.2f}-{end:.2f}s)"
-        return best.document.page_content
 
-    def answer(self, question: str, *, mode: str = "bm25", use_llm: bool = True) -> QAResponse:
-        hits = self._retrieve(question, mode=mode)
-        if not self.chain or not use_llm:
-            answer = self._fallback_answer(hits)
-            return QAResponse(answer=answer, hits=hits, source_mode=mode)
-        context = self._format_context(hits)
-        response = self.chain.invoke({"question": question, "context": context})
-        return QAResponse(answer=response, hits=hits, source_mode=mode)
+class GeneralChatAgent:
+    def __init__(self):
+        self.system_template = GENERAL_CHAT_SYSTEM
+
+    def answer(self, question: str, history: List[dict[str, str]] | None = None) -> GeneralQAResponse:
+        lang_code = _detect_language(question)
+        chat_history = prepare_history(history or []) if history else blank_history()
+        try:
+            text = invoke_text_prompt(
+                system_template=self.system_template,
+                human_template="{input}",
+                variables={
+                    "language_instruction": _language_instruction(lang_code),
+                    "input": question,
+                },
+                history=chat_history,
+            )
+        except AgentNotAvailableError:
+            return GeneralQAResponse(answer=_llm_missing_message(lang_code), language=lang_code)
+        return GeneralQAResponse(answer=text, language=lang_code)
