@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import List
 
 from .llm_utils import AgentNotAvailableError, invoke_text_prompt
+
+logger = logging.getLogger(__name__)
 
 LANGUAGE_CONFIG = {
     "zh": {"label": "中文", "name": "Chinese"},
@@ -48,7 +51,9 @@ class Translator:
                     "input": "Return only the translated text.",
                 },
             )
-            return translated.strip()
+            translated = translated.strip()
+            logger.info("Translated text to %s (%d chars).", self.target_language, len(translated))
+            return translated
         except AgentNotAvailableError as exc:
             raise RuntimeError("LLM is not configured; translation is unavailable.") from exc
 
@@ -61,6 +66,7 @@ def translate_segments_file(source_path: Path, target_dir: Path, translator: Tra
     (target_dir / "transcript_segments.json").write_text(
         json.dumps(segments, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    logger.info("Translated transcript_segments.json into %s.", translator.target_language)
 
 
 def translate_outline_file(source_path: Path, target_dir: Path, translator: Translator):
@@ -74,6 +80,7 @@ def translate_outline_file(source_path: Path, target_dir: Path, translator: Tran
     (target_dir / "knowledge_outline_enriched.json").write_text(
         json.dumps(outline, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    logger.info("Translated knowledge_outline_enriched.json into %s.", translator.target_language)
 
 
 def translate_outputs(lecture_dir: Path, languages: List[str]):
@@ -82,3 +89,4 @@ def translate_outputs(lecture_dir: Path, languages: List[str]):
         translation_dir = lecture_dir / "translations" / lang
         translate_segments_file(lecture_dir / "transcript_segments.json", translation_dir, translator)
         translate_outline_file(lecture_dir / "knowledge_outline_enriched.json", translation_dir, translator)
+        logger.info("Completed translation for %s in %s.", lang, lecture_dir)

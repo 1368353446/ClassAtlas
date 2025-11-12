@@ -12,6 +12,7 @@
 - **Dual QA modes** – One call scans the entire transcript (timestamps + summaries) while another runs a multi-turn free-form LLM chat; outputs are concatenated so users see grounded hits and open-ended answers side by side.
 - **Configurable runtime** – Adjust LLM endpoint, Whisper size, and lecture storage directory directly inside the System Settings panel; changes persist to `settings.json` and trigger an automatic reload.
 - **Slide alignment from PDF** – Upload the instructor’s slides as a PDF; each page is matched to video frames (ResNet features sampled every 2s) and attached to the relevant knowledge segments in chronological order.
+- **Observable + cache-aware pipeline** – Every stage logs to `app.log` (or stdout) with LLM request/response summaries, and artifact detection ensures reruns reuse transcripts/outlines/slides whenever possible.
 - **Collaboration-ready** – Assets live under `data/lectures/<lecture_id>/`, making it easy to sync or deploy in different environments.
 
 ## Getting Started
@@ -74,6 +75,20 @@ Inside the app:
   - Lecture storage directory
 - Saving triggers a quick reload so the new configuration is applied everywhere.
 - Knowledge segments are now created via multi-step LLM analysis (turning points → block summaries → rich content). Every segment surfaces title, summary, detailed notes, teaching method, emphasis, timestamps, and any attached PDF pages.
+
+## Logging & Diagnostics
+
+- The app configures structured logging (`%(asctime)s [LEVEL] logger: message`) as soon as `app` is imported.
+- Set `APP_LOG_LEVEL=DEBUG` to capture verbose traces, or `APP_LOG_DIR=/path/to/logs` to persist logs on disk.
+- Each LLM call records the template, payload summary (character counts), and a snippet of the response. Pipeline stages, slide alignment, translation runs, and enrichment steps produce INFO logs so you can audit production runs.
+
+## Artifact-aware reruns
+
+- `run_pipeline` inspects output artifacts before executing each stage:
+  - Existing `transcript_segments.json` skips Whisper.
+  - Existing `transcript_outline.txt` + outline JSON skip the LLM outline stage.
+  - Slide manifests are reused unless the PDF changes; enrichment re-links slides only when needed.
+- `scripts/test_pipeline_cache.py` exercises this behavior without touching your real data; run it after edits to quickly verify caching logic.
 
 ## Project Layout
 

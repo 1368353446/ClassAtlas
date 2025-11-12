@@ -1,0 +1,9 @@
+2025-11-12 23:29:43,483 [INFO] app.pipeline.runner: Pipeline run started | lecture=demo_lecture | video=/tmp/tmpn6uqkwbw/demo.mp4 | pdf=None
+2025-11-12 23:29:43,483 [INFO] app.pipeline.runner: Stage transcription [skip]: Found existing transcript at transcript_segments.json; skipping transcription.
+2025-11-12 23:29:43,483 [INFO] app.pipeline.runner: Stage outline [skip]: Detected transcript_outline.txt; reusing existing outline artifacts.
+2025-11-12 23:29:43,484 [INFO] app.pipeline.runner: Stage slides [skip]: No slides PDF provided; skipping alignment and clearing cached slides.
+2025-11-12 23:29:43,484 [INFO] app.pipeline.runner: Stage enrichment [start]: Linking slides to knowledge segments ...
+2025-11-12 23:29:43,485 [INFO] app.pipeline.runner: Attached slides to knowledge points | linked=0/1
+2025-11-12 23:29:43,485 [INFO] app.pipeline.runner: Stage enrichment [complete]: Updated references in 0.00s.
+2025-11-12 23:29:43,485 [INFO] app.pipeline.runner: Pipeline complete. Knowledge base updated.
+2025-11-12 23:29:43,485 [INFO] app.pipeline.runner: Pipeline run finished | lecture=demo_lecture | segments=2 | slides=0 | timings={'transcription': 0.0, 'outline': 0.0, 'slides': 0.0, 'enrichment': 0.0005829500005347654}

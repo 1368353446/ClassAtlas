@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,8 @@ from .transcript import (
     serialize_transcript_segments,
     transcribe_video_audio,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -66,10 +69,12 @@ def run_pipeline(
     timings: dict[str, float] = {}
 
     def notify(message: str):
+        logger.info(message)
         if progress_callback:
             progress_callback(message)
 
     def emit(stage: str, action: str, detail: str):
+        logger.info("Stage %s [%s]: %s", stage, action, detail)
         if not progress_callback:
             return
         payload = {"stage": stage, "action": action, "detail": detail}
@@ -81,6 +86,13 @@ def run_pipeline(
     selected_model = whisper_model or DEFAULT_WHISPER_MODEL
     pdf_source = Path(pdf_path) if pdf_path is not None else None
     pdf_available = pdf_source is not None and pdf_source.exists()
+    logger.info(
+        "Pipeline run started | lecture=%s | video=%s | pdf=%s",
+        lecture_id or output_dir.name,
+        video_path,
+        pdf_path,
+    )
+
     def load_cached_outline() -> KnowledgeOutline | None:
         if knowledge_outline_enriched_path.exists():
             return KnowledgeOutline.from_dict(json.loads(knowledge_outline_enriched_path.read_text(encoding="utf-8")))
@@ -204,6 +216,13 @@ def run_pipeline(
             json.loads(knowledge_outline_enriched_path.read_text(encoding="utf-8"))
         )
     notify("Pipeline complete. Knowledge base updated.")
+    logger.info(
+        "Pipeline run finished | lecture=%s | segments=%d | slides=%d | timings=%s",
+        lecture_id or output_dir.name,
+        len(serialized_segments),
+        len(slide_manifest),
+        timings,
+    )
 
     return PipelineResult(
         outline=knowledge_outline,
@@ -226,6 +245,7 @@ def attach_slide_references(
     *,
     min_overlap_seconds: float = 0.5,
 ):
+    linked = 0
     for kp in outline.knowledge_points:
         kp_start = float(kp.start_time)
         kp_end = float(kp.end_time)
@@ -237,3 +257,10 @@ def attach_slide_references(
             if overlap >= min_overlap_seconds:
                 matched_slides.append(int(slide["slide_index"]))
         kp.slides = matched_slides
+        if matched_slides:
+            linked += 1
+    logger.info(
+        "Attached slides to knowledge points | linked=%d/%d",
+        linked,
+        len(outline.knowledge_points),
+    )

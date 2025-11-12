@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 import cv2
 import fitz
@@ -11,6 +11,9 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from PIL import Image
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 def _device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
@@ -49,14 +52,17 @@ def render_pdf_pages(pdf_path: Path, slides_dir: Path) -> List[Path]:
     return page_paths
 
 
-def sample_video_frames(video_path: Path, embedder: _ImageEmbedder, interval_seconds: float = 2.0) -> List[dict]:
+def sample_video_frames(
+    video_path: Path, embedder: _ImageEmbedder, interval_seconds: float = 2.0
+) -> Tuple[List[dict], float]:
     cap = cv2.VideoCapture(str(video_path))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     total_duration = total_frames / fps if total_frames > 0 else 0.0
     frames: List[dict] = []
     if total_duration == 0.0:
-        return frames
+        cap.release()
+        return frames, total_duration
     next_capture_time = 0.0
     while next_capture_time <= total_duration + 0.5:
         cap.set(cv2.CAP_PROP_POS_MSEC, next_capture_time * 1000)
@@ -76,7 +82,7 @@ def sample_video_frames(video_path: Path, embedder: _ImageEmbedder, interval_sec
             feature = embedder.embed(pil_img)
             frames.append({"timestamp": 0.0, "feature": feature})
         cap.release()
-    return frames
+    return frames, total_duration
 
 
 def assign_pages_to_frames(page_features: List[torch.Tensor], frame_features: List[dict]) -> List[float]:
@@ -116,18 +122,30 @@ def build_slide_manifest(
         with Image.open(path) as img:
             rgb = img.convert("RGB")
             page_features.append(embedder.embed(rgb))
-    frame_features = sample_video_frames(video_path, embedder, interval_seconds=interval_seconds)
+    frame_features, total_duration = sample_video_frames(video_path, embedder, interval_seconds=interval_seconds)
     if not frame_features:
         frame_features = [{"timestamp": 0.0, "feature": page_features[0]}]
+        total_duration = max(total_duration, interval_seconds * len(page_paths))
     assignments = assign_pages_to_frames(page_features, frame_features)
     manifest: List[dict] = []
     for page_index, assigned_time in enumerate(assignments, start=1):
+        if page_index < len(assignments):
+            next_time = assignments[page_index]
+        else:
+            next_time = total_duration if total_duration > 0 else assigned_time + interval_seconds
+        end_time = max(next_time, assigned_time + 0.5)
         manifest.append(
             {
                 "slide_index": page_index,
                 "start_time": float(assigned_time),
-                "end_time": float(assigned_time),
+                "end_time": float(end_time),
                 "image_path": str(page_paths[page_index - 1]),
             }
         )
+    logger.info(
+        "Slide manifest built | pages=%d | video=%.1fs | interval=%.1fs",
+        len(manifest),
+        total_duration,
+        interval_seconds,
+    )
     return manifest

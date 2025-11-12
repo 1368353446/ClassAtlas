@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import logging
 from typing import Iterable, Sequence, Type
 
 from langchain.agents import create_agent
@@ -10,6 +10,8 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ValidationError
 
 from .config import LLM_BASE_URL, LLM_MODEL, MODELSCOPE_API_KEY
+
+logger = logging.getLogger("app.llm")
 
 
 class AgentNotAvailableError(RuntimeError):
@@ -34,6 +36,20 @@ def _safe_format(template: str, variables: dict) -> str:
         return template
 
 
+def _summarize_variables(variables: dict) -> dict:
+    summary = {}
+    for key, value in variables.items():
+        if isinstance(value, str):
+            summary[key] = f"{len(value)} chars"
+        elif isinstance(value, (list, tuple, set)):
+            summary[key] = f"{len(value)} items"
+        elif isinstance(value, dict):
+            summary[key] = f"{len(value)} keys"
+        else:
+            summary[key] = value
+    return summary
+
+
 def _invoke_agent(
     *,
     system_template: str,
@@ -48,6 +64,13 @@ def _invoke_agent(
         return None
     system_prompt = _safe_format(system_template, variables)
     human_prompt = _safe_format(human_template, variables)
+    model_name = response_model.__name__ if response_model else "text"
+    logger.info(
+        "LLM request start | model=%s | response=%s | vars=%s",
+        LLM_MODEL,
+        model_name,
+        _summarize_variables(variables),
+    )
     agent = create_agent(
         model=llm,
         tools=None,
@@ -56,7 +79,27 @@ def _invoke_agent(
     )
     messages: list[BaseMessage] = list(history or [])
     messages.append(HumanMessage(content=human_prompt))
-    return agent.invoke({"messages": messages})
+    try:
+        state = agent.invoke({"messages": messages})
+        structured = state.get("structured_response")
+        snippet = ""
+        if isinstance(structured, BaseModel):
+            snippet = structured.__class__.__name__
+        elif isinstance(structured, str):
+            snippet = structured[:160]
+        elif structured is None and state.get("messages"):
+            last = state["messages"][-1]
+            content = getattr(last, "content", "")
+            snippet = content[:160] if isinstance(content, str) else str(content)[:160]
+        logger.info(
+            "LLM request complete | response=%s | snippet=%s",
+            model_name,
+            snippet,
+        )
+        return state
+    except Exception as exc:
+        logger.exception("LLM request failed | response=%s | error=%s", model_name, exc)
+        raise
 
 
 def _coerce_structured(model: Type[BaseModel], payload) -> BaseModel:
@@ -153,4 +196,3 @@ def prepare_history(messages: Iterable[dict[str, str]]) -> list[BaseMessage]:
         else:
             prepared.append(HumanMessage(content=content))
     return prepared
-

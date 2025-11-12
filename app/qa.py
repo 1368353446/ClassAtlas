@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import List, Literal, Sequence
 
@@ -15,6 +16,8 @@ from .llm_utils import (
     build_chat_model,
 )
 from .models import TranscriptSegment
+
+logger = logging.getLogger(__name__)
 
 def build_default_llm(streaming: bool = True):
     return build_chat_model(streaming=streaming)
@@ -150,6 +153,7 @@ class TranscriptQASystem:
                 response_model=TranscriptQAResponseModel,
             )
         except AgentNotAvailableError:
+            logger.warning("Transcript QA skipped because LLM is unavailable.")
             return TranscriptQAResult(
                 status="not_found",
                 language=lang_code,
@@ -165,6 +169,7 @@ class TranscriptQASystem:
                 )
                 response = TranscriptQAResponseModel.model_validate_json(raw_text)
             except Exception:
+                logger.exception("Transcript QA failed to parse fallback response.")
                 return TranscriptQAResult(
                     status="not_found",
                     language=lang_code,
@@ -180,6 +185,12 @@ class TranscriptQASystem:
             )
             for item in response.matches
         ]
+        logger.info(
+            "Transcript QA completed | status=%s | matches=%d | language=%s",
+            response.status,
+            len(matches),
+            response.language or lang_code,
+        )
         return TranscriptQAResult(
             status=response.status,
             language=response.language or lang_code,
@@ -215,6 +226,8 @@ class GeneralChatAgent:
                 },
                 history=chat_history,
             )
+            logger.info("General chat answered | language=%s | chars=%d", lang_code, len(text))
         except AgentNotAvailableError:
+            logger.warning("General chat skipped because LLM is unavailable.")
             return GeneralQAResponse(answer=_llm_missing_message(lang_code), language=lang_code)
         return GeneralQAResponse(answer=text, language=lang_code)
